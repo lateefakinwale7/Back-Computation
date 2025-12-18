@@ -1,8 +1,10 @@
 streamlit
-matplotlib
 pandas
-openpyxl
 ezdxf
+Pillow
+xlsxwriter
 reportlab
 streamlit-drawable-canvas
+matplotlib
 numpy
+openpyxl
