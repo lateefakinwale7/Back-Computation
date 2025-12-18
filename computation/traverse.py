@@ -1,49 +1,51 @@
 import pandas as pd
 import numpy as np
+import streamlit as st
 
 def compute_lat_depart(df):
     """
-    Computes partial coordinates (Latitude and Departure).
-    Latitude (ΔN) = Distance * cos(Bearing)
-    Departure (ΔE) = Distance * sin(Bearing)
+    Computes Lat/Dep with safety checks for missing columns.
     """
-    # Convert bearing to radians for math functions
+    # Force column names to match internal logic
+    # In case the user has 'distance' instead of 'Distance'
+    cols = {col.lower(): col for col in df.columns}
+    
+    if 'distance' in cols:
+        df = df.rename(columns={cols['distance']: 'Distance'})
+    if 'bearing' in cols:
+        df = df.rename(columns={cols['bearing']: 'Bearing'})
+
+    # Final check before math
+    if 'Distance' not in df.columns or 'Bearing' not in df.columns:
+        st.error("Missing 'Distance' or 'Bearing' columns. Check your file headers.")
+        st.stop()
+
+    # Ensure data is numeric
+    df['Distance'] = pd.to_numeric(df['Distance'], errors='coerce')
+    df['Bearing'] = pd.to_numeric(df['Bearing'], errors='coerce')
+    df = df.dropna(subset=['Distance', 'Bearing'])
+
+    # Core Calculations
     bear_rad = np.radians(df['Bearing'])
     df['Latitude'] = df['Distance'] * np.cos(bear_rad)
     df['Departure'] = df['Distance'] * np.sin(bear_rad)
+    
     return df
 
 def bowditch_adjustment_with_steps(df, start_x, start_y):
     """
-    Adjusts the traverse using the Bowditch Rule.
-    Distributes misclosure error proportional to the length of each leg.
+    Standard Bowditch adjustment.
     """
     total_dist = df['Distance'].sum()
-    sum_lat = df['Latitude'].sum()
-    sum_dep = df['Departure'].sum()
+    mis_N = df['Latitude'].sum()
+    mis_E = df['Departure'].sum()
 
-    # Misclosure is the sum of partial coordinates (for a closed loop)
-    mis_N = sum_lat
-    mis_E = sum_dep
+    # Apply corrections
+    df['Adj_Lat'] = df['Latitude'] - (df['Distance'] / total_dist * mis_N)
+    df['Adj_Dep'] = df['Departure'] - (df['Distance'] / total_dist * mis_E)
 
-    # Calculate corrections for each row
-    df['Corr_Lat'] = -(df['Distance'] / total_dist) * mis_N
-    df['Corr_Dep'] = -(df['Distance'] / total_dist) * mis_E
-
-    # Apply corrections to get Adjusted values
-    df['Adj_Lat'] = df['Latitude'] + df['Corr_Lat']
-    df['Adj_Dep'] = df['Departure'] + df['Corr_Dep']
-
-    # Calculate Final Coordinates
-    coords_n = [start_y]
-    coords_e = [start_x]
-
-    for i in range(len(df)):
-        coords_n.append(coords_n[-1] + df['Adj_Lat'].iloc[i])
-        coords_e.append(coords_e[-1] + df['Adj_Dep'].iloc[i])
-
-    # Add coordinates to the dataframe (dropping the last point to match row count)
-    df['North_Coord'] = coords_n[1:]
-    df['East_Coord'] = coords_e[1:]
+    # Accumulate Coordinates
+    df['North_Coord'] = start_y + df['Adj_Lat'].cumsum()
+    df['East_Coord'] = start_x + df['Adj_Dep'].cumsum()
 
     return df, mis_N, mis_E
