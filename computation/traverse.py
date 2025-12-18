@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 
 def compute_lat_depart(df):
-    # Standardize column names
     df.columns = [str(c).strip().lower() for c in df.columns]
     mapping = {
         'n': 'northing', 'northing': 'northing', 'y': 'northing',
@@ -13,31 +12,25 @@ def compute_lat_depart(df):
     }
     df = df.rename(columns=lambda x: mapping.get(x, x))
 
-    # Back-calculate Dist/Brg if only Coordinates are provided
+    # Support for your Coordinate File: Detect N/E and calculate Dist/Brg
     if 'northing' in df.columns and 'easting' in df.columns and 'distance' not in df.columns:
         df['distance'] = np.sqrt(df['northing'].diff()**2 + df['easting'].diff()**2).fillna(0)
         df['bearing'] = (np.degrees(np.arctan2(df['easting'].diff(), df['northing'].diff())) % 360).fillna(0)
-        # We drop the first row because it's the starting point (dist=0)
         df = df[df['distance'] > 0].copy()
 
-    # Numeric conversion
     df['Distance'] = pd.to_numeric(df.get('distance', 0), errors='coerce').fillna(0.0)
     df['Bearing'] = pd.to_numeric(df.get('bearing', 0), errors='coerce').fillna(0.0)
     
-    # Calculate Raw Changes
     bear_rad = np.radians(df['Bearing'])
     df['Lat (ΔN)'] = df['Distance'] * np.cos(bear_rad)
     df['Dep (ΔE)'] = df['Distance'] * np.sin(bear_rad)
     return df
 
 def bowditch_adjustment_with_steps(df, start_x, start_y, close_loop=False):
-    # 1. LOOP CLOSURE LOGIC: Add a leg back to start if toggled
+    # Restored Loop Closure Logic
     if close_loop:
-        # Calculate current end point
         current_n = start_y + df['Lat (ΔN)'].sum()
         current_e = start_x + df['Dep (ΔE)'].sum()
-        
-        # Calculate leg required to get back to (start_x, start_y)
         dn, de = start_y - current_n, start_x - current_e
         
         if abs(dn) > 0.0001 or abs(de) > 0.0001:
@@ -49,7 +42,6 @@ def bowditch_adjustment_with_steps(df, start_x, start_y, close_loop=False):
             })
             df = pd.concat([df, close_row], ignore_index=True)
 
-    # 2. BOWDITCH ADJUSTMENT
     total_dist = df['Distance'].sum()
     mis_N, mis_E = df['Lat (ΔN)'].sum(), df['Dep (ΔE)'].sum()
 
