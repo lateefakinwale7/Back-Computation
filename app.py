@@ -1,11 +1,9 @@
 import streamlit as st
-import matplotlib.pyplot as plt
-from streamlit_drawable_canvas import st_canvas
-from PIL import Image
-import io
 import pandas as pd
+from PIL import Image
+from streamlit_drawable_canvas import st_canvas
 
-# 1. Import your modular functions
+# Modular Imports
 from inputs.excel_reader import read_excel
 from inputs.dxf_reader import read_dxf
 from inputs.image_reader import upload_image
@@ -16,100 +14,83 @@ from exports.excel_export import export_to_excel
 from exports.pdf_export import export_pdf
 from exports.dxf_export import export_to_dxf
 
-# --- Page Configuration ---
-st.set_page_config(layout="wide", page_title="Surveyor's Toolkit", page_icon="🏗️")
+st.set_page_config(layout="wide", page_title="Survey Toolkit Pro")
 
-st.title("🏗️ Professional Survey Back-Computation & Digitization")
-st.markdown("---")
+st.title("🏗️ Survey Back-Computation & Workings")
 
-# Initialize Session State
-if 'points' not in st.session_state:
-    st.session_state['points'] = []
+tab1, tab2 = st.tabs(["📊 Computation", "🗺️ Digitization"])
 
-tab1, tab2 = st.tabs(["📊 File Input (Excel/CSV/DXF)", "🗺️ Image Digitization"])
-
-# ---------------------------------------------------------
-# TAB 1: FILE INPUTS (EXCEL, CSV, DXF)
-# ---------------------------------------------------------
+# ------------------- TAB 1: COMPUTATION -------------------
 with tab1:
-    st.header("1. Upload Survey Data")
-    col_file, col_coords = st.columns([2, 1])
-    
-    with col_file:
-        file = st.file_uploader("Upload Excel (.xlsx, .xls), CSV (.csv), or DXF (.dxf)", 
-                               type=["xlsx", "xls", "csv", "dxf"])
-    
-    with col_coords:
-        start_x = st.number_input("Starting Easting (X)", value=0.0, format="%.3f")
-        start_y = st.number_input("Starting Northing (Y)", value=0.0, format="%.3f")
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        file = st.file_uploader("Upload Data (Excel, CSV, DXF)", type=["xlsx", "xls", "csv", "dxf"])
+    with col2:
+        start_x = st.number_input("Start Easting (X)", value=0.0)
+        start_y = st.number_input("Start Northing (Y)", value=0.0)
 
     if file:
         ext = file.name.split('.')[-1].lower()
-        
-        # Read the data based on extension
-        if ext == 'dxf':
-            df_raw = read_dxf(file)
-        else:
-            df_raw = read_excel(file)
+        df_raw = read_dxf(file) if ext == 'dxf' else read_excel(file)
 
         if df_raw is not None:
-            # Step 1: Compute Latitude and Departure (Handles Smart Headings N, E, Dist, Brg)
+            # 1. Processing
             df_lat_dep = compute_lat_depart(df_raw)
+            df_final, mis_n, mis_e, total_dist = bowditch_adjustment_with_steps(df_lat_dep, start_x, start_y)
             
-            # Step 2: Apply Bowditch Adjustment
-            df_final, mis_n, mis_e = bowditch_adjustment_with_steps(df_lat_dep, start_x, start_y)
+            # 2. Precision Calculation
+            linear_mis = (mis_n**2 + mis_e**2)**0.5
+            precision = total_dist / linear_mis if linear_mis != 0 else 0
             
-            # --- Display Results ---
-            st.markdown("---")
-            st.subheader("Adjustment Results")
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Misclosure North", f"{mis_n:.4f} m")
-            m2.metric("Misclosure East", f"{mis_e:.4f} m")
-            total_error = (mis_n**2 + mis_e**2)**0.5
-            m3.metric("Linear Misclosure", f"{total_error:.4f} m")
+            # 3. Main Results Display
+            st.subheader("Final Coordinates")
+            st.dataframe(df_final[['Final_N', 'Final_E']], use_container_width=True)
 
-            st.dataframe(df_final, use_container_width=True)
-            
-            # --- Plotting ---
+            # 4. Detailed Workings
+            with st.expander("📚 View Mathematical Workings"):
+                st.write("### Bowditch Rule Application")
+                st.latex(r"Correction = -\left( \frac{L_{segment}}{L_{total}} \right) \times Error")
+                st.table(df_final[['Distance', 'Lat (ΔN)', 'Corr_Lat', 'Adj_Lat', 'Final_N']].head(10))
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Total Distance", f"{total_dist:.3f} m")
+                c2.metric("Misclosure (Linear)", f"{linear_mis:.4f} m")
+                c3.metric("Precision Ratio", f"1 : {int(precision)}")
+
+            # 5. Plotting
             st.subheader("Traverse Plot")
             fig = plot_traverse(df_final)
             st.pyplot(fig)
-            
-            # --- Exports ---
-            st.subheader("Download Adjusted Workings")
-            e1, e2, e3 = st.columns(3)
-            e1.download_button("📥 Excel Workings", export_to_excel(df_final), "survey_adjustment.xlsx")
-            e2.download_button("📥 PDF Report", export_pdf(df_final), "survey_report.pdf")
-            e3.download_button("📥 DXF for CAD", export_to_dxf(df_final), "adjusted_traverse.dxf")
 
-# ---------------------------------------------------------
-# TAB 2: INTERACTIVE IMAGE DIGITIZATION
-# ---------------------------------------------------------
+            # 6. Exports
+            st.subheader("Export Results")
+            e1, e2, e3 = st.columns(3)
+            with e1:
+                pdf_bytes = export_pdf(df_final, mis_n, mis_e, precision)
+                st.download_button("📥 Download PDF Report", pdf_bytes, "Survey_Report.pdf")
+            with e2:
+                st.download_button("📥 Download Excel", export_to_excel(df_final), "Adjusted.xlsx")
+            with e3:
+                st.download_button("📥 Download DXF", export_to_dxf(df_final), "Adjusted.dxf")
+
+# ------------------- TAB 2: DIGITIZATION -------------------
 with tab2:
-    st.header("2. Digitize from Plan/Image")
-    img_file = st.file_uploader("Upload Image (JPG/PNG)", type=["jpg", "png", "jpeg"])
+    st.header("Digitize from Image")
+    img_file = st.file_uploader("Upload Plan (JPG/PNG)", type=["jpg", "png", "jpeg"])
     
     if img_file:
-        # Load and display image
         img_array = upload_image(img_file)
         img_pil = Image.fromarray(img_array)
         
-        # Resize image for canvas stability
+        # Resize for stability
         max_size = 1000
         ratio = min(max_size/img_pil.size[0], max_size/img_pil.size[1])
         new_size = (int(img_pil.size[0] * ratio), int(img_pil.size[1] * ratio))
         img_resized = img_pil.resize(new_size)
         
-        # Scaling Section
-        st.subheader("Set Scale")
-        col_scale1, col_scale2 = st.columns(2)
-        with col_scale1:
-            real_dist = st.number_input("Reference distance in meters:", value=1.0)
-        
-        st.info("Step 1: Draw a line of known distance. Step 2: Draw your traverse lines.")
+        real_dist = st.number_input("Reference Distance for Scale (m)", value=10.0)
+        st.info("Draw the scale line first, then your traverse lines.")
 
-        # Canvas for Digitization
         canvas_result = st_canvas(
             fill_color="rgba(255, 165, 0, 0.3)",
             stroke_width=2,
@@ -119,43 +100,14 @@ with tab2:
             height=img_resized.size[1],
             width=img_resized.size[0],
             drawing_mode="line",
-            key="canvas_digitize"
+            key="canvas_main"
         )
 
         if canvas_result.json_data is not None:
             objects = canvas_result.json_data["objects"]
-            if len(objects) >= 1:
-                # Calculate scale from the first line drawn
+            if len(objects) > 0:
+                # Basic scaling logic
                 obj0 = objects[0]
-                p1_scale = (obj0["left"], obj0["top"])
-                p2_scale = (p1_scale[0] + obj0["width"], p1_scale[1] + obj0["height"])
-                
-                px_dist = ((p2_scale[0]-p1_scale[0])**2 + (p2_scale[1]-p1_scale[1])**2)**0.5
-                scale = real_dist / px_dist if px_dist != 0 else 1.0
-                
-                st.write(f"Current Scale: **{scale:.4f} m/pixel**")
-                
-                # Convert all lines drawn into traverse data
-                digitized_points = []
-                for obj in objects:
-                    # Capture start and end of each line segment
-                    p_start = (obj["left"], obj["top"])
-                    p_end = (p_start[0] + obj["width"], p_start[1] + obj["height"])
-                    if p_start not in digitized_points:
-                        digitized_points.append(p_start)
-                    digitized_points.append(p_end)
-                
-                if len(digitized_points) > 1:
-                    real_coords = convert_points(digitized_points, scale)
-                    df_digitized = compute_dist_bearing(real_coords)
-                    
-                    st.subheader("Digitized Data")
-                    st.dataframe(df_digitized, use_container_width=True)
-                    
-                    # Manual transfer to Tab 1
-                    if st.button("Process these points in Tab 1"):
-                        st.session_state['digitized_data'] = df_digitized
-                        st.success("Points captured! You can now download them as Excel/DXF.")
-
-st.sidebar.markdown("---")
-st.sidebar.info("Accepted Headings: N, E, Northing, Easting, Distance, Bearing, Brg, Length.")
+                px_dist = ((obj0["width"])**2 + (obj0["height"])**2)**0.5
+                scale = real_dist / px_dist if px_dist > 0 else 1
+                st.write(f"Calculated Scale: **{scale:.4f} m/px**")
