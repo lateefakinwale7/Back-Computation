@@ -7,23 +7,17 @@ from exports.pdf_export import export_pdf
 from exports.excel_export import export_to_excel
 from exports.dxf_export import export_to_dxf
 
-st.set_page_config(layout="wide", page_title="SKYY Survey Audit", page_icon="📐")
+st.set_page_config(layout="wide", page_title="Survey Computation Pro", page_icon="📐")
 st.title("📐 Universal Survey Computation & Feature Plotter")
 
-# --- SIDEBAR (ALL FEATURES RESTORED) ---
+# --- SIDEBAR (TECHNICAL ONLY) ---
 st.sidebar.header("🛠️ Project Settings")
-# Defaulting back to 0.0 so they are not "locked"
 start_x = st.sidebar.number_input("Starting Easting (X)", value=0.0, format="%.3f")
 start_y = st.sidebar.number_input("Starting Northing (Y)", value=0.0, format="%.3f")
 
 st.sidebar.divider()
-close_loop = st.sidebar.toggle("Close Traverse Loop", value=False, help="Connects the last point back to the origin.")
-project_notes = st.sidebar.text_area("Site Notes", placeholder="Enter site conditions...")
-
-st.sidebar.divider()
-st.sidebar.header("🏢 Branding")
-comp_name = st.sidebar.text_input("Company Name", "SKYY")
-surveyor = st.sidebar.text_input("Surveyor", "Lateef")
+close_loop = st.sidebar.toggle("Close Traverse Loop", value=False, help="Mathematically connects the last point back to the start point.")
+project_notes = st.sidebar.text_area("Project Description / Site Notes", placeholder="Enter project details here...")
 
 # --- FILE HANDLING ---
 file = st.file_uploader("Upload Survey Data (Excel, CSV, DXF)", type=["xlsx", "csv", "dxf"])
@@ -77,9 +71,10 @@ if file:
         st.divider()
         e1, e2, e3 = st.columns(3)
         with e1:
-            pdf = export_pdf(df_final, mis_n, mis_e, prec, comp_name, surveyor, project_notes)
-            st.download_button("Download PDF Report", pdf, "Survey_Report.pdf")
+            # Passing empty strings for branding to keep the PDF clean
+            pdf = export_pdf(df_final, mis_n, mis_e, prec, "", "", project_notes)
+            st.download_button("Download PDF Audit Report", pdf, "Survey_Audit_Report.pdf")
         with e2:
-            st.download_button("Download Excel", export_to_excel(df_final), "Calculations.xlsx")
+            st.download_button("Download Excel Workings", export_to_excel(df_final), "Calculations.xlsx")
         with e3:
-            st.download_button("Download DXF", export_to_dxf(df_final), "Map.dxf")
+            st.download_button("Download CAD DXF", export_to_dxf(df_final), "Survey_Plan.dxf")
