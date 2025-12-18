@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from streamlit_drawable_canvas import st_canvas
 from PIL import Image
 import io
+import pandas as pd
 
 # 1. Import your modular functions
 from inputs.excel_reader import read_excel
@@ -21,7 +22,7 @@ st.set_page_config(layout="wide", page_title="Surveyor's Toolkit", page_icon="�
 st.title("🏗️ Professional Survey Back-Computation & Digitization")
 st.markdown("---")
 
-# Initialize Session State for image points if not exists
+# Initialize Session State
 if 'points' not in st.session_state:
     st.session_state['points'] = []
 
@@ -52,7 +53,7 @@ with tab1:
             df_raw = read_excel(file)
 
         if df_raw is not None:
-            # Step 1: Compute Latitude and Departure
+            # Step 1: Compute Latitude and Departure (Handles Smart Headings N, E, Dist, Brg)
             df_lat_dep = compute_lat_depart(df_raw)
             
             # Step 2: Apply Bowditch Adjustment
@@ -89,63 +90,72 @@ with tab2:
     st.header("2. Digitize from Plan/Image")
     img_file = st.file_uploader("Upload Image (JPG/PNG)", type=["jpg", "png", "jpeg"])
     
-   if img_file:
-    # 1. Load the image properly
-    img_array = upload_image(img_file)
-    img_pil = Image.fromarray(img_array)
-    
-    # 2. Force the image to a manageable size if it's massive
-    # Large images can sometimes trigger memory errors in the canvas
-    max_size = 1000
-    ratio = min(max_size/img_pil.size[0], max_size/img_pil.size[1])
-    new_size = (int(img_pil.size[0] * ratio), int(img_pil.size[1] * ratio))
-    img_resized = img_pil.resize(new_size)
-    
-    st.subheader("Set Scale")
-    # ... (rest of your scale code)
+    if img_file:
+        # Load and display image
+        img_array = upload_image(img_file)
+        img_pil = Image.fromarray(img_array)
+        
+        # Resize image for canvas stability
+        max_size = 1000
+        ratio = min(max_size/img_pil.size[0], max_size/img_pil.size[1])
+        new_size = (int(img_pil.size[0] * ratio), int(img_pil.size[1] * ratio))
+        img_resized = img_pil.resize(new_size)
+        
+        # Scaling Section
+        st.subheader("Set Scale")
+        col_scale1, col_scale2 = st.columns(2)
+        with col_scale1:
+            real_dist = st.number_input("Reference distance in meters:", value=1.0)
+        
+        st.info("Step 1: Draw a line of known distance. Step 2: Draw your traverse lines.")
 
-    # 3. Canvas for Digitization
-    canvas_result = st_canvas(
-        fill_color="rgba(255, 165, 0, 0.3)",
-        stroke_width=2,
-        stroke_color="#00FF00",
-        background_image=img_resized, # Use the resized PIL image here
-        update_streamlit=True,
-        height=img_resized.size[1],
-        width=img_resized.size[0],
-        drawing_mode="line",
-        key="canvas_digitize"
-    )
+        # Canvas for Digitization
+        canvas_result = st_canvas(
+            fill_color="rgba(255, 165, 0, 0.3)",
+            stroke_width=2,
+            stroke_color="#00FF00",
+            background_image=img_resized,
+            update_streamlit=True,
+            height=img_resized.size[1],
+            width=img_resized.size[0],
+            drawing_mode="line",
+            key="canvas_digitize"
+        )
 
         if canvas_result.json_data is not None:
             objects = canvas_result.json_data["objects"]
             if len(objects) >= 1:
-                # Use the first line to set scale
-                obj = objects[0]
-                p1 = (obj["left"], obj["top"])
-                p2 = (p1[0] + obj["width"], p1[1] + obj["height"])
+                # Calculate scale from the first line drawn
+                obj0 = objects[0]
+                p1_scale = (obj0["left"], obj0["top"])
+                p2_scale = (p1_scale[0] + obj0["width"], p1_scale[1] + obj0["height"])
                 
-                px_dist = ((p2[0]-p1[0])**2 + (p2[1]-p1[1])**2)**0.5
+                px_dist = ((p2_scale[0]-p1_scale[0])**2 + (p2_scale[1]-p1_scale[1])**2)**0.5
                 scale = real_dist / px_dist if px_dist != 0 else 1.0
                 
                 st.write(f"Current Scale: **{scale:.4f} m/pixel**")
                 
-                # Extract all points from lines drawn
-                all_points = []
+                # Convert all lines drawn into traverse data
+                digitized_points = []
                 for obj in objects:
-                    all_points.append((obj["left"], obj["top"]))
+                    # Capture start and end of each line segment
+                    p_start = (obj["left"], obj["top"])
+                    p_end = (p_start[0] + obj["width"], p_start[1] + obj["height"])
+                    if p_start not in digitized_points:
+                        digitized_points.append(p_start)
+                    digitized_points.append(p_end)
                 
-                if len(all_points) > 1:
-                    real_coords = convert_points(all_points, scale)
+                if len(digitized_points) > 1:
+                    real_coords = convert_points(digitized_points, scale)
                     df_digitized = compute_dist_bearing(real_coords)
                     
                     st.subheader("Digitized Data")
                     st.dataframe(df_digitized, use_container_width=True)
                     
-                    # Option to send this to the adjustment logic
-                    if st.button("Send Digitized Data to Adjustment"):
+                    # Manual transfer to Tab 1
+                    if st.button("Process these points in Tab 1"):
                         st.session_state['digitized_data'] = df_digitized
-                        st.success("Data transferred to Adjustment logic!")
+                        st.success("Points captured! You can now download them as Excel/DXF.")
 
 st.sidebar.markdown("---")
-st.sidebar.info("Support: Ensure Excel headers are 'Distance' and 'Bearing'.")
+st.sidebar.info("Accepted Headings: N, E, Northing, Easting, Distance, Bearing, Brg, Length.")
