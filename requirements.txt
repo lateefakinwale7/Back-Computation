@@ -1,0 +1,8 @@
+streamlit
+matplotlib
+pandas
+openpyxl
+ezdxf
+reportlab
+streamlit-drawable-canvas
+numpy

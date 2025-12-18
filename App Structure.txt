@@ -1,0 +1,26 @@
+App Structure
+SurveyApp/
+│
+├─ app.py
+├─ requirements.txt
+│
+├─ inputs/
+│   ├─ __init__.py
+│   ├─ excel_reader.py
+│   ├─ dxf_reader.py
+│   └─ image_reader.py
+│
+├─ computation/
+│   ├─ __init__.py
+│   └─ traverse.py
+│
+├─ utils/
+│   ├─ __init__.py
+│   ├─ plot_traverse.py
+│   └─ image_points.py
+│
+└─ exports/
+    ├─ __init__.py
+    ├─ excel_export.py
+    ├─ dxf_export.py
+    └─ pdf_export.py
