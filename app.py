@@ -1,123 +1,91 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io
+from computation.traverse import compute_lat_depart, bowditch_adjustment_with_steps
+from utils.plot_traverse import plot_traverse
+from exports.excel_export import export_to_excel
+from exports.pdf_export import export_pdf
+from exports.dxf_export import export_to_dxf
+from inputs.excel_reader import read_excel
+from inputs.dxf_reader import read_dxf
 
-# --- Calculation Logic (Integrated to ensure no missing imports) ---
-def compute_survey_data(df, start_x, start_y):
-    # 1. Clean column names
-    df.columns = [str(c).strip().lower() for c in df.columns]
-    mapping = {
-        'n': 'northing', 'northing': 'northing', 'y': 'northing',
-        'e': 'easting', 'easting': 'easting', 'x': 'easting',
-        'distance': 'distance', 'dist': 'distance', 'bearing': 'bearing', 'brg': 'bearing',
-        'name': 'code', 'code': 'code', 'id': 'code'
-    }
-    df = df.rename(columns=lambda x: mapping.get(x, x))
+st.set_page_config(layout="wide", page_title="Survey Pro Audit", page_icon="📐")
 
-    # 2. Check if we have Coordinates or Observations
-    has_coords = 'northing' in df.columns and 'easting' in df.columns
-    has_obs = 'distance' in df.columns and 'bearing' in df.columns
+st.title("📐 Universal Survey Computation & Audit Tool")
 
-    # 3. If we have Coordinates but NO Observations, back-calculate them
-    if has_coords and not has_obs:
-        # Calculate changes between sequential points
-        df['delta_n'] = df['northing'].diff().fillna(0)
-        df['delta_e'] = df['easting'].diff().fillna(0)
-        df['distance'] = np.sqrt(df['delta_n']**2 + df['delta_e']**2)
-        df['bearing'] = np.degrees(np.arctan2(df['delta_e'], df['delta_n'])) % 360
-        # Remove the first row if it's just the starting point with 0 distance
-        df = df[df['distance'] > 0].copy()
+# --- Sidebar (Restored All Features) ---
+st.sidebar.header("🛠️ Project Settings")
+# We allow you to set the start, but we can also detect it from the file
+start_x = st.sidebar.number_input("Starting Easting (X)", value=0.0, format="%.3f")
+start_y = st.sidebar.number_input("Starting Northing (Y)", value=0.0, format="%.3f")
 
-    # 4. Final cleaning and Trig
-    df['Distance'] = pd.to_numeric(df.get('distance', 0), errors='coerce').fillna(0)
-    df['Bearing'] = pd.to_numeric(df.get('bearing', 0), errors='coerce').fillna(0)
-    
-    bear_rad = np.radians(df['Bearing'])
-    df['Lat (ΔN)'] = df['Distance'] * np.cos(bear_rad)
-    df['Dep (ΔE)'] = df['Distance'] * np.sin(bear_rad)
-    
-    return df
+st.sidebar.divider()
+close_loop = st.sidebar.toggle("Close Traverse Loop", value=False, help="Connects the last point back to the start.")
+project_notes = st.sidebar.text_area("Site Notes", placeholder="Enter site conditions...")
 
-def apply_bowditch(df, s_x, s_y):
-    total_dist = df['Distance'].sum()
-    if total_dist == 0: return df, 0, 0, 0
-    
-    mis_n, mis_e = df['Lat (ΔN)'].sum(), df['Dep (ΔE)'].sum()
-    
-    # Mathematical strings for the audit
-    df['Corr_Lat'] = -(df['Distance'] / total_dist) * mis_n
-    df['Corr_Dep'] = -(df['Distance'] / total_dist) * mis_e
-    
-    df['Math_Lat'] = df.apply(lambda r: f"{r['Distance']:.2f} * cos({r['Bearing']:.2f})", axis=1)
-    df['Math_Dep'] = df.apply(lambda r: f"{r['Distance']:.2f} * sin({r['Bearing']:.2f})", axis=1)
-    
-    final_n, final_e, math_n, math_e = [], [], [], []
-    curr_n, curr_e = s_y, s_x
-    
-    for _, row in df.iterrows():
-        adj_lat = row['Lat (ΔN)'] + row['Corr_Lat']
-        adj_dep = row['Dep (ΔE)'] + row['Corr_Dep']
+st.sidebar.divider()
+st.sidebar.header("📥 Branding")
+comp_name = st.sidebar.text_input("Company Name", "SKYY")
+surveyor = st.sidebar.text_input("Surveyor", "Lateef")
+
+# --- File Upload & Logic ---
+file = st.file_uploader("Upload Survey Data", type=["xlsx", "xls", "csv", "dxf"])
+
+if file:
+    ext = file.name.split('.')[-1].lower()
+    df_raw = read_dxf(file) if ext == 'dxf' else read_excel(file)
+
+    if df_raw is not None:
+        # --- FIX FOR COORDINATE-ONLY FILES ---
+        # If the file has N and E but NO Distance/Bearing, we calculate them
+        df_raw.columns = [str(c).strip().lower() for c in df_raw.columns]
+        if 'n' in df_raw.columns and 'e' in df_raw.columns and 'distance' not in df_raw.columns:
+            st.info("💡 Coordinate file detected. Back-calculating Distances and Bearings...")
+            df_raw['distance'] = np.sqrt(df_raw['n'].diff()**2 + df_raw['e'].diff()**2).fillna(0)
+            df_raw['bearing'] = (np.degrees(np.arctan2(df_raw['e'].diff(), df_raw['n'].diff())) % 360).fillna(0)
+            # Update sidebar start values to match the first point in your file automatically
+            start_x = df_raw['e'].iloc[0]
+            start_y = df_raw['n'].iloc[0]
+
+        # 1. Processing
+        df_lat_dep = compute_lat_depart(df_raw)
+        df_final, mis_n, mis_e, total_dist = bowditch_adjustment_with_steps(
+            df_lat_dep, start_x, start_y, close_loop
+        )
         
-        math_n.append(f"{curr_n:.3f} + ({adj_lat:.4f})")
-        math_e.append(f"{curr_e:.3f} + ({adj_dep:.4f})")
+        lin_mis = np.sqrt(mis_n**2 + mis_e**2)
+        prec = total_dist / lin_mis if lin_mis != 0 else 0
         
-        curr_n += adj_lat
-        curr_e += adj_dep
-        final_n.append(curr_n)
-        final_e.append(curr_e)
+        # 2. Display Metrics
+        st.success("### ✅ Adjustment Summary")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Length", f"{total_dist:.3f} m")
+        m2.metric("Misclosure N", f"{mis_n:.4f} m")
+        m3.metric("Misclosure E", f"{mis_e:.4f} m")
+        m4.metric("Precision", f"1 : {int(prec)}")
+
+        # 3. Restored Tabs
+        tab_map, tab_coords, tab_workings = st.tabs(["🗺️ Feature Map", "📋 Adjusted Coordinates", "📚 Mathematical Workings"])
         
-    df['Final_N'], df['Final_E'] = final_n, final_e
-    df['Math_N'], df['Math_E'] = math_n, math_e
-    return df, mis_n, mis_e, total_dist
-
-# --- Streamlit UI ---
-st.set_page_config(layout="wide", page_title="Survey Computation Pro")
-st.title("📐 Survey Computation & Audit Tool")
-
-st.sidebar.header("🛠️ Settings")
-# Use the first coordinates from your file as defaults if available
-default_e, default_n = 44578.074, 754383.855 # Based on your uploaded file
-start_x = st.sidebar.number_input("Start Easting (X)", value=default_e, format="%.3f")
-start_y = st.sidebar.number_input("Start Northing (Y)", value=default_n, format="%.3f")
-notes = st.sidebar.text_area("Project Notes", "Survey Audit Report")
-
-uploaded_file = st.file_uploader("Upload Your File (CSV or Excel)", type=["csv", "xlsx"])
-
-if uploaded_file:
-    df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-    
-    if not df_raw.empty:
-        # Step 1: Detect and Compute
-        df_processed = compute_survey_data(df_raw, start_x, start_y)
+        with tab_map:
+            st.pyplot(plot_traverse(df_final))
         
-        if df_processed['Distance'].sum() == 0:
-            st.error("Wait! We couldn't find Distances or Coordinates in this file. Please check your column headers.")
-        else:
-            # Step 2: Bowditch Adjustment
-            df_final, m_n, m_e, t_dist = apply_bowditch(df_processed, start_x, start_y)
-            
-            st.success("### ✅ Audit Summary")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total Distance", f"{t_dist:.2f} m")
-            c2.metric("Linear Misclosure", f"{np.sqrt(m_n**2 + m_e**2):.4f} m")
-            c3.metric("Precision", f"1 : {int(t_dist/np.sqrt(m_n**2 + m_e**2)) if m_n != 0 else 'Perfect'}")
+        with tab_coords:
+            st.dataframe(df_final[['code', 'Final_E', 'Final_N']], use_container_width=True)
+        
+        with tab_workings:
+            st.subheader("Trigonometric & Coordinate Audit")
+            st.write("**Full Mathematical Steps for every Point:**")
+            # Showing the detailed math strings we built earlier
+            st.table(df_final[['code', 'Math_Lat', 'Math_Dep', 'Math_N', 'Math_E']])
 
-            tabs = st.tabs(["📚 Mathematical Audit", "📋 Final Coordinates"])
-            
-            with tabs[0]:
-                st.subheader("1. Change in Northing & Easting (ΔN / ΔE)")
-                st.table(df_final[['code', 'Math_Lat', 'Math_Dep', 'Lat (ΔN)', 'Dep (ΔE)']])
-                
-                st.subheader("2. Adjustment Corrections")
-                st.table(df_final[['code', 'Corr_Lat', 'Corr_Dep']])
-                
-                st.subheader("3. Coordinate Math")
-                col_n, col_e = st.columns(2)
-                col_n.table(df_final[['code', 'Math_N', 'Final_N']])
-                col_e.table(df_final[['code', 'Math_E', 'Final_E']])
-                
-            with tabs[1]:
-                st.dataframe(df_final[['code', 'Final_E', 'Final_N']], use_container_width=True)
-
-            st.download_button("Download Audit CSV", df_final.to_csv(index=False), "Survey_Audit.csv")
+        # 4. Restored Exports
+        st.divider()
+        e1, e2, e3 = st.columns(3)
+        with e1:
+            pdf_data = export_pdf(df_final, mis_n, mis_e, prec, comp_name, surveyor, project_notes)
+            st.download_button("Download PDF Report", pdf_data, "Survey_Report.pdf")
+        with e2:
+            st.download_button("Download Excel Workings", export_to_excel(df_final), "Calculation_Sheet.xlsx")
+        with e3:
+            st.download_button("Download CAD DXF", export_to_dxf(df_final), "Survey_Plan.dxf")
