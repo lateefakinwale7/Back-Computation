@@ -1,22 +1,29 @@
 import ezdxf
-import io
+import pandas as pd
+import math
+import os
 
-def export_to_dxf(df):
-    doc = ezdxf.new('R2010')
-    msp = doc.modelspace()
+def read_dxf(file):
+    """Reads DXF and extracts Line entities into a Traverse DataFrame."""
+    # Save the uploaded file locally temporarily to read it
+    temp_filename = "temp_upload.dxf"
+    with open(temp_filename, "wb") as f:
+        f.write(file.getbuffer())
     
-    # Create points and lines for the traverse
-    points = []
-    # Starting point (assuming 0,0 if not provided or use first coord)
-    points.append((0, 0)) 
-    
-    for _, row in df.iterrows():
-        points.append((row['East_Coord'], row['North_Coord']))
-    
-    # Draw the polyline
-    msp.add_lwpolyline(points)
-    
-    # Save to a string buffer
-    out = io.StringIO()
-    doc.write(out)
-    return out.getvalue()
+    try:
+        doc = ezdxf.readfile(temp_filename)
+        msp = doc.modelspace()
+        data = []
+        
+        for e in msp.query('LINE'):
+            dx = e.dxf.end.x - e.dxf.start.x
+            dy = e.dxf.end.y - e.dxf.start.y
+            dist = math.sqrt(dx**2 + dy**2)
+            # Survey bearing: 0 is North (Up), clockwise positive
+            bearing = math.degrees(math.atan2(dx, dy)) % 360
+            data.append({"Distance": dist, "Bearing": bearing})
+            
+        return pd.DataFrame(data)
+    finally:
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
