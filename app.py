@@ -89,32 +89,33 @@ with tab2:
     st.header("2. Digitize from Plan/Image")
     img_file = st.file_uploader("Upload Image (JPG/PNG)", type=["jpg", "png", "jpeg"])
     
-    if img_file:
-        # Load and display image
-        img_array = upload_image(img_file)
-        img_pil = Image.fromarray(img_array)
-        w, h = img_pil.size
-        
-        # Scaling Section
-        st.subheader("Set Scale")
-        col_scale1, col_scale2 = st.columns(2)
-        with col_scale1:
-            real_dist = st.number_input("Reference distance in meters:", value=1.0)
-        
-        st.info("Click two points on the image to define a known distance for scaling.")
+   if img_file:
+    # 1. Load the image properly
+    img_array = upload_image(img_file)
+    img_pil = Image.fromarray(img_array)
+    
+    # 2. Force the image to a manageable size if it's massive
+    # Large images can sometimes trigger memory errors in the canvas
+    max_size = 1000
+    ratio = min(max_size/img_pil.size[0], max_size/img_pil.size[1])
+    new_size = (int(img_pil.size[0] * ratio), int(img_pil.size[1] * ratio))
+    img_resized = img_pil.resize(new_size)
+    
+    st.subheader("Set Scale")
+    # ... (rest of your scale code)
 
-        # Canvas for Digitization
-        canvas_result = st_canvas(
-            fill_color="rgba(255, 165, 0, 0.3)",
-            stroke_width=2,
-            stroke_color="#00FF00",
-            background_image=img_pil,
-            update_streamlit=True,
-            height=h,
-            width=w,
-            drawing_mode="line",
-            key="canvas_digitize"
-        )
+    # 3. Canvas for Digitization
+    canvas_result = st_canvas(
+        fill_color="rgba(255, 165, 0, 0.3)",
+        stroke_width=2,
+        stroke_color="#00FF00",
+        background_image=img_resized, # Use the resized PIL image here
+        update_streamlit=True,
+        height=img_resized.size[1],
+        width=img_resized.size[0],
+        drawing_mode="line",
+        key="canvas_digitize"
+    )
 
         if canvas_result.json_data is not None:
             objects = canvas_result.json_data["objects"]
