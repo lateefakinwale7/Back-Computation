@@ -26,7 +26,7 @@ with tab1:
     col_input, col_settings = st.columns([2, 1])
     
     with col_input:
-        file = st.file_uploader("Upload Excel (.xlsx) or DXF (.dxf)", type=["xlsx", "dxf"])
+        file = st.file_uploader("Upload Survey Data", type=["xlsx", "xls", "csv", "dxf"])
     
     with col_settings:
         start_x = st.number_input("Starting Easting (X)", value=0.0)
@@ -108,3 +108,4 @@ with tab2:
                 # Convert all lines to traverse data
                 # (You can expand this to extract all points from all objects)
                 st.success("Points captured. Check Tab 1 logic to process this data!")
+
