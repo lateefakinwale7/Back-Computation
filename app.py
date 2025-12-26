@@ -7,35 +7,34 @@ from exports.pdf_export import export_pdf
 from exports.excel_export import export_to_excel
 from exports.dxf_export import export_to_dxf
 
-st.set_page_config(layout="wide", page_title="Survey Computation Pro", page_icon="📐")
-st.title("📐 Universal Survey Computation & Feature Plotter")
+st.set_page_config(layout="wide", page_title="Survey Pro", page_icon="📐")
+st.title("📐 Universal Survey Computation & Audit Tool")
 
-# --- SIDEBAR (TECHNICAL ONLY) ---
+# --- SIDEBAR ---
 st.sidebar.header("🛠️ Project Settings")
 start_x = st.sidebar.number_input("Starting Easting (X)", value=0.0, format="%.3f")
 start_y = st.sidebar.number_input("Starting Northing (Y)", value=0.0, format="%.3f")
 
 st.sidebar.divider()
-close_loop = st.sidebar.toggle("Close Traverse Loop", value=False, help="Mathematically connects the last point back to the start point.")
-project_notes = st.sidebar.text_area("Project Description / Site Notes", placeholder="Enter project details here...")
+close_loop = st.sidebar.toggle("Close Traverse Loop", value=False)
+notes = st.sidebar.text_area("Site Notes", placeholder="Enter survey details...")
 
-# --- FILE HANDLING ---
-file = st.file_uploader("Upload Survey Data (Excel, CSV, DXF)", type=["xlsx", "csv", "dxf"])
+# --- DATA UPLOAD ---
+file = st.file_uploader("Upload CSV or Excel", type=["xlsx", "csv", "dxf"])
 
 if file:
-    # Read the data
     df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
     
     if not df_raw.empty:
-        # Step 1: Process and Detect Data Type (Coordinates vs Measurements)
+        # Step 1: Detect Coordinate-only data and compute observations
         df_processed = compute_lat_depart(df_raw)
         
-        # Step 2: Bowditch Adjustment (Including Loop Closure)
+        # Step 2: Bowditch Adjustment
         df_final, mis_n, mis_e, total_dist = bowditch_adjustment_with_steps(
             df_processed, start_x, start_y, close_loop
         )
         
-        # Calculations for metrics
+        # Summary Statistics
         lin_mis = np.sqrt(mis_n**2 + mis_e**2)
         prec = total_dist / lin_mis if lin_mis != 0 else 0
         
@@ -46,8 +45,8 @@ if file:
         m3.metric("Misclosure E", f"{mis_e:.4f} m")
         m4.metric("Precision", f"1 : {int(prec)}")
 
-        # --- TABS ---
-        t_map, t_coords, t_audit = st.tabs(["🗺️ Feature Map", "📋 Adjusted Coordinates", "📚 Mathematical Audit"])
+        # --- AUDIT TABS ---
+        t_map, t_coords, t_audit = st.tabs(["🗺️ Plot", "📋 Coordinates", "📚 Mathematical Audit"])
         
         with t_map:
             st.pyplot(plot_traverse(df_final))
@@ -56,25 +55,19 @@ if file:
             st.dataframe(df_final[['code', 'Final_E', 'Final_N']], use_container_width=True)
             
         with t_audit:
-            st.subheader("1. Change Calculations (Trig)")
-            st.table(df_final[['code', 'Math_Lat', 'Math_Dep', 'Lat (ΔN)', 'Dep (ΔE)']])
-            
-            st.subheader("2. Adjustment Calculations (Bowditch)")
+            st.subheader("Trigonometric & Coordinate Proof")
+            # Showing full mathematical steps
+            st.table(df_final[['code', 'Math_Lat', 'Math_Dep', 'Math_N', 'Math_E']])
+            st.subheader("Bowditch Corrections")
             st.table(df_final[['code', 'Corr_Lat', 'Corr_Dep']])
-            
-            st.subheader("3. Coordinate Accumulation")
-            col_n, col_e = st.columns(2)
-            col_n.table(df_final[['code', 'Math_N', 'Final_N']])
-            col_e.table(df_final[['code', 'Math_E', 'Final_E']])
 
         # --- EXPORTS ---
         st.divider()
         e1, e2, e3 = st.columns(3)
         with e1:
-            # Passing empty strings for branding to keep the PDF clean
-            pdf = export_pdf(df_final, mis_n, mis_e, prec, "", "", project_notes)
-            st.download_button("Download PDF Audit Report", pdf, "Survey_Audit_Report.pdf")
+            pdf = export_pdf(df_final, mis_n, mis_e, prec, "", "", notes)
+            st.download_button("Download PDF Audit", pdf, "Survey_Audit.pdf")
         with e2:
-            st.download_button("Download Excel Workings", export_to_excel(df_final), "Calculations.xlsx")
+            st.download_button("Download Excel", export_to_excel(df_final), "Calculations.xlsx")
         with e3:
-            st.download_button("Download CAD DXF", export_to_dxf(df_final), "Survey_Plan.dxf")
+            st.download_button("Download DXF", export_to_dxf(df_final), "Plan.dxf")
