@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 
 def compute_lat_depart(df):
+    # Standardize column names
     df.columns = [str(c).strip().lower() for c in df.columns]
     mapping = {
         'n': 'northing', 'northing': 'northing', 'y': 'northing',
@@ -12,22 +13,27 @@ def compute_lat_depart(df):
     }
     df = df.rename(columns=lambda x: mapping.get(x, x))
 
-    # Support for your Coordinate File: Detect N/E and calculate Dist/Brg
+    # Support for Coordinate-only files: Back-calculate Dist/Brg
     if 'northing' in df.columns and 'easting' in df.columns and 'distance' not in df.columns:
         df['distance'] = np.sqrt(df['northing'].diff()**2 + df['easting'].diff()**2).fillna(0)
         df['bearing'] = (np.degrees(np.arctan2(df['easting'].diff(), df['northing'].diff())) % 360).fillna(0)
+        # Drop the first row (the anchor point with 0 distance) to begin the traverse legs
         df = df[df['distance'] > 0].copy()
 
     df['Distance'] = pd.to_numeric(df.get('distance', 0), errors='coerce').fillna(0.0)
     df['Bearing'] = pd.to_numeric(df.get('bearing', 0), errors='coerce').fillna(0.0)
     
+    # Calculate Raw Changes (Latitude and Departure)
     bear_rad = np.radians(df['Bearing'])
     df['Lat (ΔN)'] = df['Distance'] * np.cos(bear_rad)
     df['Dep (ΔE)'] = df['Distance'] * np.sin(bear_rad)
     return df
 
 def bowditch_adjustment_with_steps(df, start_x, start_y, close_loop=False):
-    # Restored Loop Closure Logic
+    # Reset index to ensure clean sequential processing
+    df = df.reset_index(drop=True)
+
+    # 1. Safe Loop Closure Logic
     if close_loop:
         current_n = start_y + df['Lat (ΔN)'].sum()
         current_e = start_x + df['Dep (ΔE)'].sum()
@@ -36,12 +42,20 @@ def bowditch_adjustment_with_steps(df, start_x, start_y, close_loop=False):
         if abs(dn) > 0.0001 or abs(de) > 0.0001:
             dist_close = np.sqrt(dn**2 + de**2)
             bear_close = np.degrees(np.arctan2(de, dn)) % 360
-            close_row = pd.DataFrame({
-                'Distance': [dist_close], 'Bearing': [bear_close], 
-                'Lat (ΔN)': [dn], 'Dep (ΔE)': [de], 'code': ['CLOSE']
+            
+            # Build a closing row that matches ALL existing columns to prevent index errors
+            close_data = {col: [None] for col in df.columns}
+            close_data.update({
+                'Distance': [dist_close], 
+                'Bearing': [bear_close], 
+                'Lat (ΔN)': [dn], 
+                'Dep (ΔE)': [de], 
+                'code': ['CLOSE']
             })
+            close_row = pd.DataFrame(close_data)
             df = pd.concat([df, close_row], ignore_index=True)
 
+    # 2. Bowditch Adjustment Calculations
     total_dist = df['Distance'].sum()
     mis_N, mis_E = df['Lat (ΔN)'].sum(), df['Dep (ΔE)'].sum()
 
@@ -55,6 +69,7 @@ def bowditch_adjustment_with_steps(df, start_x, start_y, close_loop=False):
     curr_n, curr_e = start_y, start_x
     
     for _, row in df.iterrows():
+        # Audit Math Strings
         work_lat.append(f"{row['Distance']:.2f} * cos({row['Bearing']:.2f})")
         work_dep.append(f"{row['Distance']:.2f} * sin({row['Bearing']:.2f})")
         
@@ -70,6 +85,8 @@ def bowditch_adjustment_with_steps(df, start_x, start_y, close_loop=False):
     df['Final_N'], df['Final_E'] = final_n, final_e
     df['Math_Lat'], df['Math_Dep'] = work_lat, work_dep
     df['Math_N'], df['Math_E'] = work_n, work_e
+    
+    # Feature Grouping (Plots lines based on point names)
     df['Group'] = df['code'].astype(str).str.extract('([a-zA-Z]+)', expand=False).fillna('PT')
     
     return df, mis_N, mis_E, total_dist
